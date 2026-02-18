@@ -11,3 +11,5 @@ MOT_Sequence_Creation_Quarto_Before_Tracking_Periods.qmd
 .httr-oauth
 .quarto
 .RDataTmp1
+logs
+cache
