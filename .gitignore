@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.RDataTmp
+.Ruserdata
+/.quarto/
+Tables
+MOT_Sequence_Creation_Quarto_cache
+MOT_Sequence_Creation_Quarto_Before_Tracking_Periods.qmd
+.DS_Store
+.httr-oauth
+.quarto
