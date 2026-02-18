@@ -1,0 +1,208 @@
+---
+title: "MOT_Sequence_Target_Density"
+author: "Freya Joessel"
+editor: source
+date: today
+toc: true
+toc-depth: 5
+# toc-expand: true
+number-sections: true
+highlight-style: pygments
+toc-location: left
+reference-location: margin
+citation-location: margin
+format:
+  html: 
+    code-fold: true
+    html-math-method: katex
+---
+
+
+```{r preamble}
+#| echo: false
+#| include: false
+
+library(dplyr)
+library(progress)
+library(ggplot2)
+library(purrr)
+library(parallel)
+
+```
+
+
+```{r load-data}
+#| echo: false
+#| cache: true
+#| include: false
+
+density_per_frame_tables_all.df <- readRDS(file = "Tables/density_per_frame_tables_all.rds")
+
+```
+
+
+# Task Parameters
+
+```{r task-parameters}
+#| echo: false
+#| include: false
+
+n_targets_in_experiment <- 5
+
+tracking_duration_s <- 4
+trial_duration_s <- 6
+probing_duration <- trial_duration_s - tracking_duration_s
+trial_n_frames <- max(density_per_frame_tables_all.df$frame_num)
+probing_n_frames <- probing_duration*(trial_n_frames - 1)/trial_duration_s + 1
+tracking_n_frames <- trial_n_frames - probing_n_frames
+
+```
+
+We opt for N targets to track = `r n_targets_in_experiment` to have enough room above and below the typical performance of young adults at this variant of the MOT task (around 75% - Green and Bavelier (2006)). 
+
+
+# Target Density Low/High Throughout
+
+## Finding sets of circles with low/high density with themselves
+
+```{r compute-density-within-subsets-function}
+#| echo: false
+#| include: false
+#| cache: true
+
+# density_per_frame_tables_for_claude.df <- density_per_frame_tables_all.df %>% 
+#   filter(trial_num <= 10, i_dataset == 1) %>% 
+#   select(i_dataset, trial_num, frame_num, circle_num, x_coord, y_coord)
+# write.csv(x = density_per_frame_tables_for_claude.df, 
+#           file = "Tables/density_per_frame_table_for_claude.csv", 
+#           row.names = F)
+
+# ─────────────────────────────────────────────
+# 1. Function
+# ─────────────────────────────────────────────
+
+compute_target_density <- function(data, target_set, start_frame, end_frame) {
+  
+  # Pre-filter to relevant frames for efficiency
+  data_filtered <- data %>%
+    filter(frame_num >= start_frame, 
+           frame_num <= end_frame, 
+           circle_num %in% target_set)
+  
+  # For each circle × frame in range, compute sum of distances to all target_set circles
+  density_df <- data_filtered %>%
+    group_by(i_dataset, trial_num, frame_num, circle_num) %>%
+    group_modify(~ {
+      if(exists("pb") && !is.null(pb)) {
+        pb$tick()
+      }
+      current_circle <- .x  # x, y of this circle
+      
+      # Get coordinates of all target_set circles in this trial × frame
+      target_coords <- data_filtered %>%
+        filter(i_dataset == .y$i_dataset,
+               trial_num == .y$trial_num,
+               frame_num  == .y$frame_num,
+               circle_num %in% target_set)
+      
+      # Compute sum of Euclidean distances from this circle to each target circle
+      target_density <- target_coords %>%
+        mutate(dist = sqrt((x_coord - current_circle$x_coord)^2 +
+                             (y_coord - current_circle$y_coord)^2)) %>%
+        pull(dist) %>%
+        sum()
+      
+      .x %>% mutate(target_density = target_density)
+    }) %>%
+    ungroup() %>% 
+    mutate(
+      target_set = paste(target_set, collapse = "-")
+    )
+  
+  return(density_df)
+}
+
+
+compute_target_density_wrapper <- function(data, target_sets, start_frame, end_frame) {
+  
+  n_cores <- detectCores() - 1  # leave 1 core free for the OS
+  cl <- makeCluster(n_cores)
+  
+  # Export everything the workers need to run compute_target_density()
+  clusterExport(cl, varlist = c("compute_target_density", "data", "start_frame", "end_frame"),
+                envir = environment())
+  clusterEvalQ(cl, library(dplyr))
+  
+  target_density_per_frame.list <- parLapply(cl, target_sets, function(target_set) {
+    compute_target_density(
+      data        = data,
+      target_set  = target_set,
+      start_frame = start_frame,
+      end_frame   = end_frame)
+  })
+  
+  stopCluster(cl)
+  
+  target_density_per_frame.df <- bind_rows(target_density_per_frame.list)
+  return(target_density_per_frame.df)
+}
+
+
+```
+
+```{r compute-density-within-subsets-parameters}
+#| echo: false
+#| include: false
+#| cache: true
+
+# ─────────────────────────────────────────────
+# 2. Run for all target sets and combine
+# ─────────────────────────────────────────────
+
+target_sets <- combn(16, 5, simplify = F)
+
+n_target_sets <- length(unlist(target_sets))
+
+
+start_frame <- 1
+end_frame <- trial_n_frames  
+n_frames <- (end_frame - start_frame + 1)
+
+
+```
+
+```{r compute-density-within-subsets-below-threshold-trials}
+#| echo: false
+#| include: false
+#| cache: true
+
+density_per_frame_tables_below_throughout.df <- 
+  saveRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
+
+n_trials_below <- nrow(unique(density_per_frame_tables_below_throughout.df %>%
+                                       select(i_dataset, trial_num)))
+pb <- progress_bar$new(
+  total = n_target_sets * n_frames * n_trials_below,
+  format = "  downloading [:bar] :percent in :elapsed, eta: :eta",
+  clear = F)
+pb$tick(0)
+target_density_per_frame_tables_below_throughout.df <- 
+  compute_target_density_wrapper(
+    data = density_per_frame_tables_below_throughout.df, 
+    target_sets = target_sets, 
+    start_frame = start_frame, 
+    end_frame = end_frame)
+
+
+write.csv(target_density_per_frame_tables_below_throughout.df, 
+          file = "Tables/target_density_per_frame_tables_below_throughout.csv", 
+          row.names = F)
+saveRDS(target_density_per_frame_tables_below_throughout.df, 
+        file = "Tables/target_density_per_frame_tables_below_throughout.rds")
+
+
+```
+
+
+
+
