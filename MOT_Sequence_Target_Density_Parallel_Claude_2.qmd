@@ -151,7 +151,7 @@ compute_target_density_wrapper <- function(data, target_sets, start_frame, end_f
                   n_done, length(target_sets), length(target_sets_todo)))
   
   if (length(target_sets_todo) > 0) {
-    n_cores <- detectCores() - 1  # leave 1 core free for the OS
+    n_cores <- detectCores() - 2  # leave 2 core free for the OS
     cl <- makeCluster(n_cores)
     
     tryCatch({
@@ -161,7 +161,9 @@ compute_target_density_wrapper <- function(data, target_sets, start_frame, end_f
                     envir = environment())
       clusterEvalQ(cl, library(dplyr))
       
+      message("starting parallel loop")
       parLapply(cl, target_sets_todo, function(target_set) {
+        message(sprintf("starting set %s at %s...", paste(target_set, collapse = "-"), format(Sys.time(), "%H:%M:%S")))
         result <- compute_target_density(
           data        = data,
           target_set  = target_set,
@@ -170,6 +172,7 @@ compute_target_density_wrapper <- function(data, target_sets, start_frame, end_f
         # Option 3: save result to cache as soon as this set is done
         saveRDS(result,
                 file = file.path(cache_dir, paste0(paste(target_set, collapse = "-"), ".rds")))
+        message(sprintf("saved set %s at %s.", paste(target_set, collapse = "-"), format(Sys.time(), "%H:%M:%S")))
       })
     }, finally = {
       stopCluster(cl)
@@ -214,7 +217,7 @@ n_frames <- (end_frame - start_frame + 1)
 #| cache: true
 
 density_per_frame_tables_below_throughout.df <- 
-  saveRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
+  readRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
 
 n_trials_below <- nrow(unique(density_per_frame_tables_below_throughout.df %>%
                                        select(i_dataset, trial_num)))

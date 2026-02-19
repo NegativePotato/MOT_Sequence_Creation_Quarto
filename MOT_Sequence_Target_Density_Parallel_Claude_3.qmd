@@ -238,7 +238,7 @@ n_frames <- (end_frame - start_frame + 1)
 #| cache: true
 
 density_per_frame_tables_below_throughout.df <- 
-  saveRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
+  readRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
 
 n_trials_below <- nrow(unique(density_per_frame_tables_below_throughout.df %>%
                                        select(i_dataset, trial_num)))
