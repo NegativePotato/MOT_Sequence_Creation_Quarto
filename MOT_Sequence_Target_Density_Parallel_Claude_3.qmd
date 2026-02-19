@@ -166,7 +166,7 @@ compute_target_density_wrapper <- function(data, target_sets, start_frame, end_f
                   n_done, length(target_sets), length(target_sets_todo)))
   
   if (length(target_sets_todo) > 0) {
-    n_cores <- detectCores() - 1  # leave 1 core free for the OS
+    n_cores <- detectCores() - 3  # leave 3 core free for the OS
     cl <- makeCluster(n_cores)
     
     tryCatch({
