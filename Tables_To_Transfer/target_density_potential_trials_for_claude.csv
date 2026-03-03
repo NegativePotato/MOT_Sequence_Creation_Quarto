@@ -1,0 +1,11 @@
+"","i_dataset","trial_num","trial_id","target_set","n_circles_all_frames_below","density_traj_type","target_density_traj_type","n_circles_all_frames_above"
+"1",1,169,"1-169","1-4-14-15-16",5,"below","below",NA
+"2",1,169,"1-169","1-4-5-14-16",5,"below","below",NA
+"3",1,169,"1-169","1-4-5-15-16",5,"below","below",NA
+"4",1,169,"1-169","2-3-6-7-10",5,"below","below",NA
+"5",1,169,"1-169","2-3-6-7-8",5,"below","below",NA
+"6",1,169,"1-169","2-3-6-8-10",5,"below","below",NA
+"7",1,169,"1-169","2-6-8-9-10",5,"below","below",NA
+"8",1,210,"1-210","1-2-10-13-15",5,"below","below",NA
+"9",1,210,"1-210","1-2-11-13-15",5,"below","below",NA
+"10",1,210,"1-210","1-2-7-10-13",5,"below","below",NA
