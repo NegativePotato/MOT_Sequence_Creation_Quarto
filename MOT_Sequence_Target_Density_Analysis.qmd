@@ -27,6 +27,8 @@ library(dplyr)
 library(progress)
 library(ggplot2)
 library(purrr)
+library(gganimate)
+# detach("package:gganimate", unload = T)
 
 ```
 
@@ -174,18 +176,18 @@ if(file.exists(file.path("Tables", "target_density_n_frames_below_below.rds"))) 
 #| echo: false
 #| include: false
 
-target_density_n_frames_below_below_count.df <- target_density_n_frames_below.df %>% 
+target_density_n_frames_below_below_count.df <- target_density_n_frames_below_below.df %>% 
   group_by(target_set, i_dataset, trial_num, trial_id) %>% 
   summarize(n_circles_all_frames_below = sum(n_frames_below == 240), 
             n_circles_all_frames_above = sum(n_frames_below == 0), 
             .groups = "drop")
 
-target_density_below_potential_trials.df <- target_density_n_frames_below_above_count.df %>% 
+target_density_below_below_below_potential_trials.df <- target_density_n_frames_below_below_count.df %>% 
   filter(n_circles_all_frames_below == 5) %>%
   select(i_dataset, trial_num, trial_id, target_set, n_circles_all_frames_below) %>% 
   arrange(i_dataset, trial_num, target_set)
 
-target_density_above_potential_trials.df <- target_density_n_frames_below_above_count.df %>% 
+target_density_below_below_above_potential_trials.df <- target_density_n_frames_below_below_count.df %>% 
   filter(n_circles_all_frames_above == 5) %>%
   select(i_dataset, trial_num, trial_id, target_set, n_circles_all_frames_above) %>% 
   arrange(i_dataset, trial_num, target_set)
@@ -193,5 +195,76 @@ target_density_above_potential_trials.df <- target_density_n_frames_below_above_
 
 ```
 
+# Show an example 
+
+## Density : Below / Target Density : Below 
+
+```{r load-data}
+#| echo: false
+#| cache: true
+#| include: false
+
+density_per_frame_tables_all.df <- readRDS(file = "Tables/density_per_frame_tables_all.rds")
+
+```
+
+
+```{r find-trials-and-target-sets-with-target-density-above-below-threshold} 
+#| echo: false
+#| include: false
+
+
+video_dir <- "Videos"
+
+potential_trial_idx <- 1 
+trial_type <- "below_below"
+  
+  
+trial_curr.df <- 
+  target_density_below_below_below_potential_trials.df[potential_trial_idx,]
+target_set_curr <- as.numeric(strsplit(trial_curr.df$target_set, split = "-")[[1]])
+
+trial_curr_frames.df <- density_per_frame_tables_all.df %>% 
+  filter(trial_num == trial_curr.df$trial_num, 
+         i_dataset == trial_curr.df$i_dataset) %>% 
+  mutate(circle_type = ifelse(circle_num %in% target_set_curr, 
+                              "target", "distractor"), 
+         circle_color = ifelse(circle_type == "target" & 
+                          frame_num <= probing_n_frames, 
+                        "blue", "yellow")) %>% 
+  select(!circle_id)
+
+circleFun <- function(center = c(0,0),diameter = 1, npoints = 100){
+    r = diameter / 2
+    tt <- seq(0,2*pi,length.out = npoints)
+    xx <- center[1] + r * cos(tt)
+    yy <- center[2] + r * sin(tt)
+    return(data.frame(x = xx, y = yy))
+}
+dat_circle <- circleFun(c(0,0),20,npoints = 200)
+
+p <- ggplot() +
+  # geom_circle(aes(x0 = 0, y0 = 0, r = 10), fill = "grey", color = "black") +
+  geom_path(data = dat_circle, aes(x,y)) + 
+  geom_point(data = trial_curr_frames.df, 
+            aes(x = x_coord, y_coord, colour = circle_color),
+            size = 5, show.legend = FALSE) +
+  scale_colour_manual(values = c("blue", "yellow")) + 
+  coord_fixed() + # Ensures the circle isn't oval
+  theme_void()
+
+anim <- p + transition_time(frame_num) +
+  ease_aes("linear")
+
+anim_save(filename = sprintf("trial_%s_%s_%s.mp4", trial_type, trial_curr.df$trial_id, trial_curr.df$target_set), 
+          animation = anim, 
+          path = video_dir,
+          nframes = 361, fps = 60, 
+          width = 600, height = 600, 
+          renderer = av_renderer())
+
+```
+
+## Density : Below / Target Density : Above 
 
 
