@@ -100,7 +100,7 @@ if(file.exists(file.path("Tables", "target_densities_means_above.rds"))) {
 #| cache: false
 #| include: false
 
-target_density_threshold <- median(target_density.df$target_density_mean)/4
+target_density_threshold <- median(target_density.df$target_density_mean)
 
 ```
 
