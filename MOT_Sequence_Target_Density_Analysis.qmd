@@ -1,0 +1,166 @@
+---
+title: "MOT_Sequence_Target_Density_Analysis"
+author: "Freya Joessel"
+editor: source
+date: today
+toc: true
+toc-depth: 5
+# toc-expand: true
+number-sections: true
+highlight-style: pygments
+toc-location: left
+reference-location: margin
+citation-location: margin
+format:
+  html: 
+    code-fold: true
+    html-math-method: katex
+---
+
+Use this script after the script "MOT_Sequence_Target_Density_Parallel_Claude_3.qmd" has been run
+
+```{r preamble}
+#| echo: false
+#| include: false
+
+library(dplyr)
+library(progress)
+library(ggplot2)
+library(purrr)
+
+```
+
+```{r load-data}
+#| echo: false
+#| cache: true
+#| include: false
+
+data_dir_below <- "Tables/Target_Densities/Sequences_Below"
+data_dir_above <- "Tables/Target_Densities/Sequences_Above"
+
+files_list_below <- list.files(path = data_dir_below, pattern = "*.rds", full.names = T)
+files_list_above <- list.files(path = data_dir_above, pattern = "*.rds", full.names = T)
+```
+
+```{r task-parameters}
+#| echo: false
+#| include: false
+
+n_targets_in_experiment <- 5
+
+tracking_duration_s <- 4
+trial_duration_s <- 6
+probing_duration <- trial_duration_s - tracking_duration_s
+trial_n_frames <- 361
+probing_n_frames <- probing_duration*(trial_n_frames - 1)/trial_duration_s + 1
+tracking_n_frames <- trial_n_frames - probing_n_frames
+
+```
+
+# Threshold for target density
+
+The threshold for target density will be the median across all possible combinations of 5 targets of the mean target density across all frames and circles in the trials we analyzed. 
+
+```{r compute-mean-target-density-per-trial}
+#| echo: false
+#| cache: true
+#| include: false
+
+if(file.exists(file.path("Tables", "target_densities_means_above.rds"))) {
+    target_density.df <- readRDS(file = file.path("Tables", "target_densities_means_above.rds"))
+} else {
+  target_density_threshold <- list()
+  
+  n_files <- length(files_list)
+  pb <- progress_bar$new(format = "(:spin) [:bar] eta :eta", total = n_files)
+  pb$tick(0)
+  
+  for (i_file in seq_along(files_list)) {
+    target_densities_curr.df <- readRDS(files_list[[i_file]])
+    
+    target_density_threshold[[i_file]] <- target_densities_curr.df %>% 
+      select(target_set, target_density) %>% 
+      group_by(target_set) %>% 
+      summarize(target_density_mean = mean(target_density/4))
+    
+    pb$tick(1)
+  }
+    
+  target_density.df <- bind_rows(target_density_threshold)
+  
+  write.csv(x = target_density.df, file = file.path("Tables", "target_densities_means_above.csv"))
+  saveRDS(object = target_density.df, file = file.path("Tables", "target_densities_means_above.rds"))
+}
+
+```
+
+
+```{r compute-target-density-threshold}
+#| echo: false
+#| cache: false
+#| include: false
+
+target_density_threshold <- median(target_density.df$target_density_mean)/4
+
+```
+
+```{r n-frames-under-threshold-per-target-sets-and-trials-tracking-period} 
+#| echo: false
+#| include: false
+
+if(file.exists(file.path("Tables", "target_density_n_frames_below_above.rds"))) {
+  target_density_n_frames_below.df <- readRDS(file = file.path("Tables", "target_density_n_frames_below_above.rds"))
+} else {
+  n_files <- length(files_list)
+  pb <- progress_bar$new(format = "(:spin) [:bar] eta :eta", total = n_files)
+  pb$tick(0)
+  
+  target_density_n_frames_below <- list()
+  
+  for (i_file in seq_along(files_list)) {
+    target_densities_curr.df <- readRDS(files_list[[i_file]])
+    
+    target_density_n_frames_below[[i_file]] <- target_densities_curr.df %>% 
+      filter(frame_num > probing_n_frames) %>%
+      mutate(target_density = target_density/4) %>% 
+      group_by(target_set, circle_num, i_dataset, trial_num, trial_id) %>% 
+      dplyr::summarize(n_frames_below = sum(target_density < target_density_threshold), .groups = "keep")
+    
+    pb$tick(1)
+  }
+  
+  target_density_n_frames_below.df <- bind_rows(target_density_n_frames_below)
+
+  write.csv(x = target_density_n_frames_below.df, 
+            file = file.path("Tables", "target_density_n_frames_below_above.csv"))
+  saveRDS(object = target_density_n_frames_below.df, 
+          file = file.path("Tables", "target_density_n_frames_below_above.rds"))  
+}
+
+```
+
+```{r find-trials-and-target-sets-with-target-density-above-below-threshold} 
+#| echo: false
+#| include: false
+
+target_density_n_frames_below_above_count.df <- target_density_n_frames_below.df %>% 
+  group_by(target_set, i_dataset, trial_num, trial_id) %>% 
+  summarize(n_circles_all_frames_below = sum(n_frames_below == 240), 
+            n_circles_all_frames_above = sum(n_frames_below == 0), 
+            .groups = "drop")
+
+target_density_below_potential_trials.df <- target_density_n_frames_below_above_count.df %>% 
+  filter(n_circles_all_frames_below == 5) %>%
+  select(i_dataset, trial_num, trial_id, target_set, n_circles_all_frames_below) %>% 
+  arrange(i_dataset, trial_num, target_set)
+
+target_density_above_potential_trials.df <- target_density_n_frames_below_above_count.df %>% 
+  filter(n_circles_all_frames_above == 5) %>%
+  select(i_dataset, trial_num, trial_id, target_set, n_circles_all_frames_above) %>% 
+  arrange(i_dataset, trial_num, target_set)
+
+
+```
+
+
+
