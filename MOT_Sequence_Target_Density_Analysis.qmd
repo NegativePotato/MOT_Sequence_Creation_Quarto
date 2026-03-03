@@ -109,16 +109,16 @@ target_density_threshold <- median(target_density.df$target_density_mean)/4
 #| include: false
 
 if(file.exists(file.path("Tables", "target_density_n_frames_below_above.rds"))) {
-  target_density_n_frames_below.df <- readRDS(file = file.path("Tables", "target_density_n_frames_below_above.rds"))
+  target_density_n_frames_below_above.df <- readRDS(file = file.path("Tables", "target_density_n_frames_below_above.rds"))
 } else {
-  n_files <- length(files_list)
+  n_files <- length(files_list_above)
   pb <- progress_bar$new(format = "(:spin) [:bar] eta :eta", total = n_files)
   pb$tick(0)
   
   target_density_n_frames_below <- list()
   
-  for (i_file in seq_along(files_list)) {
-    target_densities_curr.df <- readRDS(files_list[[i_file]])
+  for (i_file in seq_along(files_list_above)) {
+    target_densities_curr.df <- readRDS(files_list_above[[i_file]])
     
     target_density_n_frames_below[[i_file]] <- target_densities_curr.df %>% 
       filter(frame_num > probing_n_frames) %>%
@@ -137,13 +137,44 @@ if(file.exists(file.path("Tables", "target_density_n_frames_below_above.rds"))) 
           file = file.path("Tables", "target_density_n_frames_below_above.rds"))  
 }
 
+
+if(file.exists(file.path("Tables", "target_density_n_frames_below_below.rds"))) {
+  target_density_n_frames_below_below.df <- readRDS(file = file.path("Tables", "target_density_n_frames_below_below.rds"))
+} else {
+  n_files <- length(files_list_below)
+  pb <- progress_bar$new(format = "(:spin) [:bar] eta :eta", total = n_files)
+  pb$tick(0)
+  
+  target_density_n_frames_below <- list()
+  
+  for (i_file in seq_along(files_list_below)) {
+    target_densities_curr.df <- readRDS(files_list_below[[i_file]])
+    
+    target_density_n_frames_below[[i_file]] <- target_densities_curr.df %>% 
+      filter(frame_num > probing_n_frames) %>%
+      mutate(target_density = target_density/4) %>% 
+      group_by(target_set, circle_num, i_dataset, trial_num, trial_id) %>% 
+      dplyr::summarize(n_frames_below = sum(target_density < target_density_threshold), .groups = "keep")
+    
+    pb$tick(1)
+  }
+  
+  target_density_n_frames_below.df <- bind_rows(target_density_n_frames_below)
+
+  write.csv(x = target_density_n_frames_below.df, 
+            file = file.path("Tables", "target_density_n_frames_below_below.csv"))
+  saveRDS(object = target_density_n_frames_below.df, 
+          file = file.path("Tables", "target_density_n_frames_below_below.rds"))  
+}
+
+
 ```
 
 ```{r find-trials-and-target-sets-with-target-density-above-below-threshold} 
 #| echo: false
 #| include: false
 
-target_density_n_frames_below_above_count.df <- target_density_n_frames_below.df %>% 
+target_density_n_frames_below_below_count.df <- target_density_n_frames_below.df %>% 
   group_by(target_set, i_dataset, trial_num, trial_id) %>% 
   summarize(n_circles_all_frames_below = sum(n_frames_below == 240), 
             n_circles_all_frames_above = sum(n_frames_below == 0), 
