@@ -242,15 +242,33 @@ density_per_frame_tables_all.df <- readRDS(file = "Tables/density_per_frame_tabl
 
 ```
 
-
-```{r find-trials-and-target-sets-with-target-density-above-below-threshold} 
+```{r save-video-function}
 #| echo: false
 #| include: false
 
+# ─────────────────────────────────────────────
+# 1. Single-trial video saving function
+# ─────────────────────────────────────────────
 
-# function
-save_video <- function(trial_curr.df, density_per_frame_tables_all.df, video_dir) {
-
+save_video <- function(trial_curr.df, density_per_frame_tables_all.df, video_dir,
+                       log_file = NULL) {
+  
+  # Helper to write a timestamped line to this worker's dedicated log file
+  log_msg <- function(msg) {
+    if (!is.null(log_file)) {
+      cat(sprintf("%s | %s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), msg),
+          file = log_file, append = TRUE)
+    }
+  }
+  
+  trial_label <- sprintf("trial_%s-%s_%s_%s",
+                         trial_curr.df$density_traj_type,
+                         trial_curr.df$target_density_traj_type,
+                         trial_curr.df$trial_id,
+                         trial_curr.df$target_set)
+  
+  log_msg(sprintf("[%s] Starting", trial_label))
+  
   target_set_curr <- as.numeric(strsplit(trial_curr.df$target_set, split = "-")[[1]])
   trial_type <- sprintf("%s-%s", 
                         trial_curr.df$density_traj_type, 
@@ -266,23 +284,22 @@ save_video <- function(trial_curr.df, density_per_frame_tables_all.df, video_dir
                           "blue", "yellow")) %>% 
     select(!circle_id)
   
-  circleFun <- function(center = c(0,0),diameter = 1, npoints = 100){
-      r = diameter / 2
-      tt <- seq(0,2*pi,length.out = npoints)
-      xx <- center[1] + r * cos(tt)
-      yy <- center[2] + r * sin(tt)
-      return(data.frame(x = xx, y = yy))
+  circleFun <- function(center = c(0,0), diameter = 1, npoints = 100){
+    r = diameter / 2
+    tt <- seq(0, 2*pi, length.out = npoints)
+    xx <- center[1] + r * cos(tt)
+    yy <- center[2] + r * sin(tt)
+    return(data.frame(x = xx, y = yy))
   }
-  dat_circle <- circleFun(c(0,0),20,npoints = 200)
+  dat_circle <- circleFun(c(0,0), 20, npoints = 200)
   
   p <- ggplot() +
-    # geom_circle(aes(x0 = 0, y0 = 0, r = 10), fill = "grey", color = "black") +
-    geom_path(data = dat_circle, aes(x,y)) + 
+    geom_path(data = dat_circle, aes(x, y)) + 
     geom_point(data = trial_curr_frames.df, 
-              aes(x = x_coord, y_coord, colour = circle_color),
-              size = 5, show.legend = FALSE) +
+               aes(x = x_coord, y_coord, colour = circle_color),
+               size = 5, show.legend = FALSE) +
     scale_colour_manual(values = c("blue", "yellow")) + 
-    coord_fixed() + # Ensures the circle isn't oval
+    coord_fixed() +
     theme_void()
   
   anim <- p + transition_time(frame_num) +
@@ -293,17 +310,97 @@ save_video <- function(trial_curr.df, density_per_frame_tables_all.df, video_dir
             path = video_dir,
             nframes = 361, fps = 60, 
             width = 600, height = 600, 
-            renderer = av_renderer())  
+            renderer = av_renderer())
+  
+  log_msg(sprintf("[%s] Done", trial_label))
 }
 
-# usage
-video_dir <- "Videos"
-potential_trial_idx <- 2
-trial_curr.df <- 
-  target_density_potential_trials.df[potential_trial_idx,]
-save_video(trial_curr.df, density_per_frame_tables_all.df, video_dir)
+
+# ─────────────────────────────────────────────
+# 2. Parallel wrapper
+# ─────────────────────────────────────────────
+
+save_videos_parallel <- function(potential_trials.df, density_per_frame_tables_all.df,
+                                 video_dir = "Videos/",
+                                 log_dir   = "logs/videos/",
+                                 n_cores   = 5) {
+  
+  dir.create(video_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(log_dir,   showWarnings = FALSE, recursive = TRUE)
+  
+  # Failsafe: derive the expected filename for each trial, skip already saved videos
+  potential_trials.df <- potential_trials.df %>%
+    mutate(video_filename = sprintf("trial_%s-%s_%s_%s.mp4",
+                                    density_traj_type,
+                                    target_density_traj_type,
+                                    trial_id,
+                                    target_set),
+           video_path = file.path(video_dir, video_filename))
+  
+  trials_todo.df <- potential_trials.df %>%
+    filter(!file.exists(video_path))
+  
+  n_done <- nrow(potential_trials.df) - nrow(trials_todo.df)
+  message(sprintf("%d / %d videos already saved. %d remaining.",
+                  n_done, nrow(potential_trials.df), nrow(trials_todo.df)))
+  
+  if (nrow(trials_todo.df) == 0) {
+    message("Nothing to do — all videos already exist.")
+    return(invisible(NULL))
+  }
+  
+  # Split the todo dataframe into a list of single-row dataframes for parLapply
+  trials_todo.list <- split(trials_todo.df, seq_len(nrow(trials_todo.df)))
+  
+  cl <- makeCluster(n_cores)
+  
+  tryCatch({
+    clusterExport(cl, varlist = c("save_video", "density_per_frame_tables_all.df",
+                                  "video_dir", "log_dir", "probing_n_frames"),
+                  envir = environment())
+    clusterEvalQ(cl, {
+      library(dplyr)
+      library(ggplot2)
+      library(gganimate)
+      library(av)
+      # Assign each worker a dedicated log file named by its PID
+      worker_log_file <<- file.path(log_dir, sprintf("worker_%d.log", Sys.getpid()))
+    })
+    
+    parLapply(cl, trials_todo.list, function(trial_curr.df) {
+      save_video(trial_curr.df            = trial_curr.df,
+                 density_per_frame_tables_all.df = density_per_frame_tables_all.df,
+                 video_dir               = video_dir,
+                 log_file                = worker_log_file)
+    })
+    
+  }, finally = {
+    stopCluster(cl)
+  })
+  
+  # Write completion summary to main log
+  cat(sprintf("%s | All videos complete.\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+      file = file.path(log_dir, "main.log"), append = TRUE)
+  
+  message("Done. All videos saved to: ", video_dir)
+  return(invisible(NULL))
+}
 
 ```
+
+```{r save-videos-run}
+#| echo: false
+#| include: false
+
+save_videos_parallel(
+  potential_trials.df             = target_density_potential_trials.df,
+  density_per_frame_tables_all.df = density_per_frame_tables_all.df,
+  video_dir                       = "Videos/",
+  log_dir                         = "logs/videos/",
+  n_cores                         = 5)
+
+```
+
 
 ## Density : Below / Target Density : Above 
 
