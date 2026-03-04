@@ -229,9 +229,7 @@ target_density_potential_trials.df <- bind_rows(
 
 ```
 
-# Show an example 
-
-## Density : Below / Target Density : Below 
+# Save the videos (parallelized code)
 
 ```{r load-data}
 #| echo: false
@@ -400,8 +398,5 @@ save_videos_parallel(
   n_cores                         = 5)
 
 ```
-
-
-## Density : Below / Target Density : Above 
 
 

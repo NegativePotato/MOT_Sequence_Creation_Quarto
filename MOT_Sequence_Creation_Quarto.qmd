@@ -26,6 +26,8 @@ library(dplyr)
 library(progress)
 library(ggplot2)
 library(purrr)
+library(parallel)
+library(gganimate)
 
 ```
 
@@ -188,11 +190,15 @@ There are `r n_full_above` trajectories with a density above the threshold at al
 #| include: false
 #| cache: true
 
-n_frames_above_threshold.df <- density_per_frame_tables_all.df %>% 
+n_frames_above_threshold_density.df <- density_per_frame_tables_all.df %>% 
   filter(frame_num > probing_n_frames) %>%
   group_by(i_dataset, trial_num, circle_num) %>% 
   dplyr::reframe(n_frames_above_threshold = sum(density > density_threshold$median),
                  n_frames_above_threshold_perc = n_frames_above_threshold/n())
+
+write.csv(n_frames_above_threshold_density.df, file = "Tables/n_frames_above_threshold_density.csv", row.names = F)
+saveRDS(n_frames_above_threshold_density.df, file = "Tables/n_frames_above_threshold_density.rds")
+
 
 n_trajectories_full_above_or_below_per_trial.df <- n_frames_above_threshold.df %>%
   group_by(i_dataset, trial_num) %>% 
@@ -356,7 +362,8 @@ high_low_periods_wide.df <- high_low_periods.df %>%
                   "high-to-low", 
                   ifelse(period_n_frames_perc_low_beginning == 1 &
                     period_n_frames_perc_high_end == 1, 
-                    "low-to-high", "none"))) 
+                    "low-to-high", "none")), 
+         trial_id = paste(i_dataset, trial_num, sep = "-")) 
 names(high_low_periods_wide.df) <- gsub("^period_", "", names(high_low_periods_wide.df))
 
 count_high_low_trajectories_per_trial.df <- high_low_periods_wide.df %>% 
@@ -416,15 +423,69 @@ trials_to_keep_for_low_to_high_density.df <-
   count_high_low_trajectories_per_trial.df %>% 
   filter(n_trajectories >= n_targets_in_experiment) %>% 
   filter(potential_period_duration == period_duration) %>% 
-  filter(high_to_low_category == "low-to-high") 
+  filter(high_to_low_category == "low-to-high") %>% 
+  mutate(trial_id = paste(i_dataset, trial_num, sep = "-"))
 n_possible_trials_low_to_high <- nrow(trials_to_keep_for_low_to_high_density.df)
 
 trials_to_keep_for_high_to_low_density.df <- 
   count_high_low_trajectories_per_trial.df %>% 
   filter(n_trajectories >= n_targets_in_experiment) %>% 
   filter(potential_period_duration == period_duration) %>% 
-  filter(high_to_low_category == "high-to-low") 
+  filter(high_to_low_category == "high-to-low") %>% 
+  mutate(trial_id = paste(i_dataset, trial_num, sep = "-"))
 n_possible_trials_high_to_low <- nrow(trials_to_keep_for_high_to_low_density.df)
+
+
+circles_low_to_high_threshold_density.df <- 
+  high_low_periods_wide.df %>% 
+  filter(trial_id %in% unique(trials_to_keep_for_low_to_high_density.df$trial_id),
+         high_to_low_category == "low-to-high", 
+         potential_period_duration == period_duration) %>% 
+  group_by(i_dataset, trial_num, trial_id, high_to_low_category) %>% 
+  mutate(n_traj = n()) %>% 
+  filter(n_traj >= 5) %>% 
+  dplyr::summarise(target_set = paste(circle_num, collapse = "-"), .groups = "drop") %>% 
+  mutate(density_traj_type = high_to_low_category)
+
+circles_high_to_low_threshold_density.df <- 
+  high_low_periods_wide.df %>% 
+  filter(trial_id %in% unique(trials_to_keep_for_high_to_low_density.df$trial_id),
+         high_to_low_category == "high-to-low", 
+         potential_period_duration == period_duration) %>% 
+  group_by(i_dataset, trial_num, trial_id, high_to_low_category) %>% 
+  mutate(n_traj = n()) %>% 
+  filter(n_traj >= 5) %>% 
+  dplyr::summarise(target_set = paste(circle_num, collapse = "-"), .groups = "drop") %>% 
+  mutate(density_traj_type = high_to_low_category)
+
+circles_high_low_threshold_density.df <- 
+  bind_rows(
+    circles_low_to_high_threshold_density.df, 
+    circles_high_to_low_threshold_density.df
+  ) %>% 
+  mutate(target_density_traj_type = "all")
+
+saveRDS(object = circles_high_low_threshold_density.df, 
+        file = "Tables/circles_high_low_threshold_density.rds")
+write.csv(x = circles_high_low_threshold_density.df, 
+          file = "Tables/circles_high_low_threshold_density.csv", 
+          row.names = F)
+
+# Trials To Keep Low-To-High and High-To-Low
+trials_to_keep_low_high.str <- circles_high_low_threshold_density.df$trial_id
+
+info_per_frame_low_to_high_and_high_to_low.df <- 
+  density_per_frame_tables_all.df %>% 
+  mutate(trial_id = paste(i_dataset, trial_num, sep = "-")) %>% 
+  filter(trial_id %in% trials_to_keep_low_high.str) %>% 
+  merge(circles_high_low_threshold_density.df)
+
+write.csv(info_per_frame_low_to_high_and_high_to_low.df, 
+          file = "Tables/info_per_frame_low_to_high_and_high_to_low.csv", 
+          row.names = F)
+saveRDS(info_per_frame_low_to_high_and_high_to_low.df, 
+        file = "Tables/info_per_frame_low_to_high_and_high_to_low.rds")
+
 
 ```
 
@@ -450,210 +511,320 @@ knitr::kable(trials_to_keep_for_low_to_high_density.df, align = "c")
 knitr::kable(trials_to_keep_for_high_to_low_density.df, align = "c")
 ```
 
-# Target Density Low/High Throughout
+# Videos of potential trials
 
-## Finding sets of circles with low/high density with themselves
+```{r find-sets-of-targets-with-density-above-threshold}
 
-```{r compute-density-within-subsets-function}
-#| echo: false
-#| include: false
-#| cache: true
+density_per_frame_tables_above_throughout.df <- readRDS(file = "Tables/density_per_frame_tables_above_throughout.rds") 
+trial_ids_above_density <- unique(density_per_frame_tables_above_throughout.df$trial_id)
 
-# density_per_frame_tables_for_claude.df <- density_per_frame_tables_all.df %>% 
-#   filter(trial_num <= 10, i_dataset == 1) %>% 
-#   select(i_dataset, trial_num, frame_num, circle_num, x_coord, y_coord)
-# write.csv(x = density_per_frame_tables_for_claude.df, 
-#           file = "Tables/density_per_frame_table_for_claude.csv", 
-#           row.names = F)
+density_per_frame_tables_below_throughout.df <- readRDS(file = "Tables/density_per_frame_tables_below_throughout.rds") 
+trial_ids_below_density <- unique(density_per_frame_tables_below_throughout.df$trial_id)
 
-# ─────────────────────────────────────────────
-# 1. Function
-# ─────────────────────────────────────────────
+n_frames_above_threshold_density.df <- readRDS(file = "Tables/n_frames_above_threshold_density.rds")
 
-compute_target_density <- function(data, target_set, start_frame, end_frame) {
-  
-  # Pre-filter to relevant frames for efficiency
-  data_filtered <- data %>%
-    filter(frame_num >= start_frame, 
-           frame_num <= end_frame, 
-           circle_num %in% target_set)
-  
-  # For each circle × frame in range, compute sum of distances to all target_set circles
-  density_df <- data_filtered %>%
-    group_by(i_dataset, trial_num, frame_num, circle_num) %>%
-    group_modify(~ {
-      if(!is.null(pb)) {
-        pb$tick()
-      }
-      current_circle <- .x  # x, y of this circle
-      
-      # Get coordinates of all target_set circles in this trial × frame
-      target_coords <- data_filtered %>%
-        filter(i_dataset == .y$i_dataset,
-               trial_num == .y$trial_num,
-               frame_num  == .y$frame_num,
-               circle_num %in% target_set)
-      
-      # Compute sum of Euclidean distances from this circle to each target circle
-      target_density <- target_coords %>%
-        mutate(dist = sqrt((x_coord - current_circle$x_coord)^2 +
-                             (y_coord - current_circle$y_coord)^2)) %>%
-        pull(dist) %>%
-        sum()
-      
-      .x %>% mutate(target_density = target_density)
-    }) %>%
-    ungroup() %>% 
-    mutate(
-      target_set = paste(target_set, collapse = "-")
-    )
-  
-  return(density_df)
-}
+circles_with_frames_above_threshold_density.df <- 
+  n_frames_above_threshold_density.df %>% 
+  mutate(trial_id = sprintf("%i-%i", i_dataset, trial_num)) %>% 
+  filter(trial_id %in% trial_ids_above_density, 
+         n_frames_above_threshold == 240) %>% 
+  group_by(i_dataset, trial_num, trial_id) %>% 
+  mutate(n_traj = n()) %>% 
+  filter(n_traj == 5) %>% 
+  dplyr::summarise(target_set = paste(circle_num, collapse = "-"), .groups = "drop") %>% 
+  mutate(density_traj_type = "above")
+
+circles_with_frames_below_threshold_density.df <- 
+  n_frames_above_threshold_density.df %>% 
+  mutate(trial_id = sprintf("%i-%i", i_dataset, trial_num)) %>% 
+  filter(trial_id %in% trial_ids_below_density, 
+         n_frames_above_threshold == 0) %>% 
+  group_by(i_dataset, trial_num, trial_id) %>% 
+  mutate(n_traj = n()) %>% 
+  filter(n_traj == 5) %>% 
+  dplyr::summarise(target_set = paste(circle_num, collapse = "-"), .groups = "drop") %>% 
+  mutate(density_traj_type = "below")
+
+circles_with_all_tracking_frames_threshold_density.df <- bind_rows(
+  circles_with_frames_above_threshold_density.df,
+  circles_with_frames_below_threshold_density.df
+) %>% 
+  mutate(target_density_traj_type = "all")
+
+saveRDS(object = circles_with_all_tracking_frames_threshold_density.df, 
+        file = "Tables/circles_with_all_tracking_frames_threshold_density.rds")
+write.csv(x = circles_with_all_tracking_frames_threshold_density.df, 
+          file = "Tables/circles_with_all_tracking_frames_threshold_density.csv", 
+          row.names = F)
 
 
-compute_target_density_wrapper <- function(data, target_sets, start_frame, end_frame) {
-  target_density_per_frame.list <- list()
-  for (i_set in 1:length(target_sets)) {
-    target_set <- target_sets[[i_set]]
-    
-    target_density_per_frame.list[[i_set]] <- compute_target_density(
-      data        = data,
-      target_set  = target_set,
-      start_frame = start_frame,
-      end_frame   = end_frame)
-  }
-  target_density_per_frame.df <- bind_rows(target_density_per_frame.list)
-  return(target_density_per_frame.df)
-}
+info_per_frame_traj_above_throughout.df <- 
+  density_per_frame_tables_above_throughout.df %>% 
+  mutate(density_traj_type = "above")
 
+info_per_frame_traj_below_throughout.df <- 
+  density_per_frame_tables_below_throughout.df %>% 
+  mutate(density_traj_type = "below")
 
-```
-
-```{r compute-density-within-subsets-parameters}
-#| echo: false
-#| include: false
-#| cache: true
-
-# ─────────────────────────────────────────────
-# 2. Run for all target sets and combine
-# ─────────────────────────────────────────────
-
-target_sets <- list(
-  c(1,2,3,4,5),
-  c(6,7,8,9,10),
-  c(11,12,13,14,15),
-  c(1,3,5,7,9),
-  c(11,13,15,16,1),
-  c(2,4,6,8,10),
-  c(12,14,16,1,2),
-  c(3,6,9,12,15),
-  c(4,7,10,13,16),
-  c(2,5,8,11,14), 
-  c(1,5,9,13,3),
-  c(2,6,10,14,4),
-  c(3,7,11,15,7),
-  c(4,8,12,16,8),
-  c(5,10,15,12,9),
-  c(6,11,16,13,14)
+info_per_frame_traj_density_throughout.df <- bind_rows(
+  info_per_frame_traj_above_throughout.df,
+  info_per_frame_traj_below_throughout.df
 )
 
-n_target_sets <- length(unlist(target_sets))
-
-
-start_frame <- 1
-end_frame <- trial_n_frames  
-n_frames <- (end_frame - start_frame + 1)
-
-
-```
-
-```{r compute-density-within-subsets-above-threshold-trials}
-#| echo: false
-#| include: false
-#| cache: true
-
-density_per_frame_tables_above_throughout.df <- 
-  readRDS(file = "Tables/density_per_frame_tables_above_throughout.rds")
-n_trials_above <- nrow(unique(density_per_frame_tables_above_throughout.df %>%
-                                select(trial_num, i_dataset)))
-
-
-start.time <- Sys.time()
-
-pb <- progress_bar$new(total = n_target_sets * n_frames * n_trials_above)
-pb$tick(0)
-target_density_per_frame_tables_above_throughout.df <- 
-  compute_target_density_wrapper(
-    data = density_per_frame_tables_above_throughout.df, 
-    target_sets = target_sets, 
-    start_frame = start_frame, 
-    end_frame = end_frame)
-
-end.time <- Sys.time()
-time.taken <- end.time - start.time
-time.taken
-time_for_target_set_per_trial <- time.taken / nrow(unique(density_per_frame_tables_for_claude.df %>% select(i_dataset, trial_num)))
-time_for_target_set_per_trial
-
-write.csv(target_density_per_frame_tables_above_throughout.df, 
-          file = "Tables/target_density_per_frame_tables_above_throughout.csv", 
+saveRDS(object = info_per_frame_traj_density_throughout.df, 
+        file = "Tables/info_per_frame_traj_density_throughout.rds")
+write.csv(x = info_per_frame_traj_density_throughout.df, 
+          file = "Tables/info_per_frame_traj_density_throughout.csv", 
           row.names = F)
-saveRDS(target_density_per_frame_tables_above_throughout.df, 
-        file = "Tables/target_density_per_frame_tables_above_throughout.rds")
 
 
 ```
 
-```{r compute-density-within-subsets-below-threshold-trials}
+```{r save-video-function}
 #| echo: false
 #| include: false
-#| cache: true
-
-density_per_frame_tables_below_throughout.df <- 
-  saveRDS(file = "Tables/density_per_frame_tables_below_throughout.rds")
-
-n_trials_below <- nrow(unique(density_per_frame_tables_below_throughout.df %>%
-                                       select(i_dataset, trial_num)))
-pb <- progress_bar$new(total = n_target_sets * n_frames * n_trials_below)
-pb$tick(0)
-target_density_per_frame_tables_below_throughout.df <- 
-  compute_target_density_wrapper(
-    data = density_per_frame_tables_below_throughout.df, 
-    target_sets = target_sets, 
-    start_frame = start_frame, 
-    end_frame = end_frame)
-
-
-write.csv(target_density_per_frame_tables_below_throughout.df, 
-          file = "Tables/target_density_per_frame_tables_below_throughout.csv", 
-          row.names = F)
-saveRDS(target_density_per_frame_tables_below_throughout.df, 
-        file = "Tables/target_density_per_frame_tables_below_throughout.rds")
-
-
-```
-
-```{r find-trajectories-with}
-#| echo: false
-#| include: false
-#| cache: true
 
 # ─────────────────────────────────────────────
-# 3. Summary stats collapsed across everything
+# 1. Single-trial video saving function
 # ─────────────────────────────────────────────
 
-summary_stats <- combined_df %>%
-  filter(!is.na(target_density)) %>%
-  summarise(
-    median_density = median(target_density),
-    mean_density   = mean(target_density),
-    sd_density     = sd(target_density)
-  )
+save_video <- function(trial_curr.df, density_per_frame_tables_all.df, video_dir,
+                       log_file = NULL) {
+  
+  # Helper to write a timestamped line to this worker's dedicated log file
+  log_msg <- function(msg) {
+    if (!is.null(log_file)) {
+      cat(sprintf("%s | %s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), msg),
+          file = log_file, append = TRUE)
+    }
+  }
+  
+  trial_label <- sprintf("trial_%s-%s_%s_%s",
+                         trial_curr.df$density_traj_type,
+                         trial_curr.df$target_density_traj_type,
+                         trial_curr.df$trial_id,
+                         trial_curr.df$target_set)
+  
+  log_msg(sprintf("[%s] Starting", trial_label))
+  
+  target_set_curr <- as.numeric(strsplit(trial_curr.df$target_set, split = "-")[[1]])
+  trial_type <- sprintf("%s-%s", 
+                        trial_curr.df$density_traj_type, 
+                        trial_curr.df$target_density_traj_type)
+  
+  trial_curr_frames.df <- density_per_frame_tables_all.df %>% 
+    filter(trial_num == trial_curr.df$trial_num, 
+           i_dataset == trial_curr.df$i_dataset) 
+  
+  circleFun <- function(center = c(0,0), diameter = 1, npoints = 100){
+    r = diameter / 2
+    tt <- seq(0, 2*pi, length.out = npoints)
+    xx <- center[1] + r * cos(tt)
+    yy <- center[2] + r * sin(tt)
+    return(data.frame(x = xx, y = yy))
+  }
+  dat_circle <- circleFun(c(0,0), 20, npoints = 200)
+  
+  p <- ggplot() +
+    geom_path(data = dat_circle, aes(x, y)) + 
+    geom_point(data = trial_curr_frames.df, 
+               aes(x = x_coord, y_coord, colour = circle_color),
+               size = 5, show.legend = FALSE) +
+    scale_colour_manual(values = c("blue" = "blue", "violet" = "violet", "yellow" = "yellow")) + 
+    coord_fixed() +
+    theme_void() + 
+    ggtitle("Frame: {frame_time}")
+  
+  anim <- p + transition_time(frame_num) +
+    ease_aes("linear")
+  
+  anim_save(filename = sprintf("trial_%s_%s_%s.mp4", trial_type, trial_curr.df$trial_id, trial_curr.df$target_set), 
+            animation = anim, 
+            path = video_dir,
+            nframes = 361, fps = 60, 
+            width = 600, height = 600, 
+            renderer = av_renderer())
+  
+  log_msg(sprintf("[%s] Done", trial_label))
+}
 
-print(summary_stats)
+
+# ─────────────────────────────────────────────
+# 2. Parallel wrapper
+# ─────────────────────────────────────────────
+
+save_videos_parallel <- function(potential_trials.df, density_per_frame_tables_all.df,
+                                 video_dir = "Videos/",
+                                 log_dir   = "logs/videos/",
+                                 n_cores   = 5) {
+  
+  dir.create(video_dir, showWarnings = FALSE, recursive = TRUE)
+  dir.create(log_dir,   showWarnings = FALSE, recursive = TRUE)
+  
+  # Failsafe: derive the expected filename for each trial, skip already saved videos
+  potential_trials.df <- potential_trials.df %>%
+    mutate(video_filename = sprintf("trial_%s-%s_%s_%s.mp4",
+                                    density_traj_type,
+                                    target_density_traj_type,
+                                    trial_id,
+                                    target_set),
+           video_path = file.path(video_dir, video_filename))
+  
+  trials_todo.df <- potential_trials.df %>%
+    filter(!file.exists(video_path))
+  
+  n_done <- nrow(potential_trials.df) - nrow(trials_todo.df)
+  message(sprintf("%d / %d videos already saved. %d remaining.",
+                  n_done, nrow(potential_trials.df), nrow(trials_todo.df)))
+  
+  if (nrow(trials_todo.df) == 0) {
+    message("Nothing to do — all videos already exist.")
+    return(invisible(NULL))
+  }
+  
+  # Split the todo dataframe into a list of single-row dataframes for parLapply
+  trials_todo.list <- split(trials_todo.df, seq_len(nrow(trials_todo.df)))
+  
+  cl <- makeCluster(n_cores)
+  
+  tryCatch({
+    clusterExport(cl, varlist = c("save_video", "density_per_frame_tables_all.df",
+                                  "video_dir", "log_dir", "probing_n_frames"),
+                  envir = environment())
+    clusterEvalQ(cl, {
+      library(dplyr)
+      library(ggplot2)
+      library(gganimate)
+      library(av)
+      # Assign each worker a dedicated log file named by its PID
+      worker_log_file <<- file.path(log_dir, sprintf("worker_%d.log", Sys.getpid()))
+    })
+    
+    parLapply(cl, trials_todo.list, function(trial_curr.df) {
+      save_video(trial_curr.df            = trial_curr.df,
+                 density_per_frame_tables_all.df = density_per_frame_tables_all.df,
+                 video_dir               = video_dir,
+                 log_file                = worker_log_file)
+    })
+    
+  }, finally = {
+    stopCluster(cl)
+  })
+  
+  # Write completion summary to main log
+  cat(sprintf("%s | All videos complete.\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+      file = file.path(log_dir, "main.log"), append = TRUE)
+  
+  message("Done. All videos saved to: ", video_dir)
+  return(invisible(NULL))
+}
 
 ```
+
+```{r save-videos-density-throughout}
+#| echo: false
+#| include: false
+
+# As participants will see them
+circles_with_all_tracking_frames_threshold_density.df <- 
+  readRDS(file = "Tables/circles_with_all_tracking_frames_threshold_density.rds")
+info_per_frame_traj_density_throughout.df <- 
+  readRDS(file = "Tables/info_per_frame_traj_density_throughout.rds") %>% 
+    mutate(circle_type = ifelse(circle_num %in% target_set_curr, 
+                                "target", "distractor"), 
+           circle_color = ifelse(circle_type == "target" & 
+                            frame_num <= probing_n_frames, 
+                          "blue", "yellow")) %>% 
+    select(!circle_id)
+
+save_videos_parallel(
+  potential_trials.df             = circles_with_all_tracking_frames_threshold_density.df,
+  density_per_frame_tables_all.df = info_per_frame_traj_density_throughout.df,
+  video_dir                       = "Videos/",
+  log_dir                         = "logs/videos/",
+  n_cores                         = 5)
+
+# With target marked
+circles_with_all_tracking_frames_threshold_density.df <- 
+  readRDS(file = "Tables/circles_with_all_tracking_frames_threshold_density.rds")
+info_per_frame_traj_density_throughout_highlighted.df <- 
+  readRDS(file = "Tables/info_per_frame_traj_density_throughout.rds") %>% 
+    mutate(circle_type = ifelse(circle_num %in% target_set_curr, 
+                                "target", "distractor"), 
+           circle_color = case_when(
+             circle_type == "target" & frame_num <= probing_n_frames ~ "blue", 
+             circle_type == "target" & frame_num > probing_n_frames ~ "violet",
+            .default = "yellow")) %>% 
+    select(!circle_id)
+
+save_videos_parallel(
+  potential_trials.df             = circles_with_all_tracking_frames_threshold_density.df,
+  density_per_frame_tables_all.df = info_per_frame_traj_density_throughout_highlighted.df,
+  video_dir                       = "Videos_With_Targets_Highlighted/",
+  log_dir                         = "logs/videos/",
+  n_cores                         = 5)
+
+```
+
+```{r save-videos-density-throughout}
+#| echo: false
+#| include: false
+
+
+circles_high_low_threshold_density.df <- 
+  readRDS(file = "Tables/circles_high_low_threshold_density.rds")
+info_per_frame_low_to_high_and_high_to_low.df <- 
+  readRDS(file = "Tables/info_per_frame_low_to_high_and_high_to_low.rds")  %>% 
+    mutate(circle_type = ifelse(circle_num %in% target_set_curr, 
+                                "target", "distractor"), 
+           circle_color = ifelse(circle_type == "target" & 
+                            frame_num <= probing_n_frames, 
+                          "blue", "yellow")) %>% 
+    select(!circle_id)
+
+save_videos_parallel(
+  potential_trials.df             = circles_high_low_threshold_density.df,
+  density_per_frame_tables_all.df = info_per_frame_low_to_high_and_high_to_low.df,
+  video_dir                       = "Videos/",
+  log_dir                         = "logs/videos/",
+  n_cores                         = 5)
+
+
+# With target marked
+circles_high_low_threshold_density.df <- 
+  readRDS(file = "Tables/circles_high_low_threshold_density.rds")
+info_per_frame_low_to_high_and_high_to_low.df <- 
+  readRDS(file = "Tables/info_per_frame_low_to_high_and_high_to_low.rds") %>% 
+    mutate(circle_type = ifelse(circle_num %in% target_set_curr, 
+                                "target", "distractor"), 
+           circle_color = case_when(
+             circle_type == "target" & frame_num <= probing_n_frames ~ "blue", 
+             circle_type == "target" & frame_num > probing_n_frames ~ "violet",
+            .default = "yellow")) %>% 
+    select(!circle_id)
+
+save_videos_parallel(
+  potential_trials.df             = circles_high_low_threshold_density.df,
+  density_per_frame_tables_all.df = info_per_frame_low_to_high_and_high_to_low.df,
+  video_dir                       = "Videos_With_Targets_Highlighted/",
+  log_dir                         = "logs/videos/",
+  n_cores                         = 5)
+
+```
+
+
+# Target Density Low/High Throughout
+
+Here we look for sets of five (5) circles with density within themselves that is below/above the threshold throughout the tracking period. This is done using the scripts:
+
+1. `MOT_Sequence_Target_Density_Parallel_Claude3.qmd` to compute the density within each possible set of five (5) circles for the potential trials identified above with five (5) circles that have low/high density throughout the tracking period, 
+2. `MOT_Sequence_Target_Density_Analysis.qmd` to identify and make a video of all the potential target sets that have been identified to have a density between themselves above/below the threshold throughout the tracking period within the trials identified above.
+
+The goal now is to identify sets of trials and targets sets such that : 
+- among the trials with targets that have `low overall density`, find target sets with `high target density`, 
+- among the trials with targets that have `high overall density`, find target sets with `low target density`,
+
+
 
 
 
